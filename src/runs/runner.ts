@@ -12,7 +12,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { type Run, exitCodePath, loadRun, metricsPath, logPath, runDir, saveRun } from './store.ts';
@@ -50,6 +50,10 @@ export async function startRun(options: StartRunOptions): Promise<Run> {
   // THIS process: when HANDLER exits the pipe closes, and the run's next log
   // write gets EPIPE and kills it. A run that dies when its watcher restarts is
   // the opposite of what 'detached' is for.
+  // A leftover exitcode file from a previous occupant of this directory would
+  // make reconcile() classify this run before it has even finished.
+  if (existsSync(exitCodePath(id))) await rm(exitCodePath(id), { force: true });
+
   const logFd = openSync(logPath(id), 'a');
   let child;
   try {
@@ -100,6 +104,45 @@ export async function startRun(options: StartRunOptions): Promise<Run> {
   return run;
 }
 
+/**
+ * Kill the run's whole process group, not just the pid we recorded.
+ *
+ * The recorded pid is the wrapper shell, and the trainer is its child. Signal
+ * the shell alone and the trainer is orphaned — it keeps running, keeps
+ * writing metrics, and keeps costing money, while the console cheerfully shows
+ * the run as killed. Verified: after `kill -TERM <recorded pid>` the trainer
+ * carried on stepping.
+ *
+ * `detached: true` makes the child a process-group leader, so its pgid equals
+ * its pid and a negative pid signals the group.
+ */
+async function terminateGroup(pid: number): Promise<void> {
+  const signal = (sig: NodeJS.Signals): boolean => {
+    try {
+      process.kill(-pid, sig);
+      return true;
+    } catch {
+      try {
+        // No group (or already reaped) — fall back to the single process.
+        process.kill(pid, sig);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  if (!signal('SIGTERM')) return;
+
+  // Give it a moment to shut down cleanly, then insist. A training process
+  // ignoring SIGTERM is common — frameworks trap it to flush checkpoints.
+  for (let waited = 0; waited < 5000; waited += 250) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    if (!isAlive(pid)) return;
+  }
+  signal('SIGKILL');
+}
+
 /** True when the OS still has this pid. Used to tell a stall from a crash. */
 export function isAlive(pid?: number): boolean {
   if (!pid) return false;
@@ -117,14 +160,12 @@ export async function killRun(runId: string, reason: string): Promise<Run> {
 
   // Only signal a run we still believe is ours. A finished run's pid gets
   // recycled, and killing whatever inherited it would be the single worst
-  // thing this tool could do.
-  const finished = Boolean(run.endedAt) || run.status !== 'running';
-  if (run.pid && !finished && isAlive(run.pid)) {
-    try {
-      process.kill(run.pid, 'SIGTERM');
-    } catch {
-      // Gone between the liveness check and the signal. Fine.
-    }
+  // thing this tool could do. The exitcode file is proof the wrapper already
+  // exited, so the pid is no longer ours to signal.
+  const finished =
+    Boolean(run.endedAt) || run.status !== 'running' || existsSync(exitCodePath(run.id));
+  if (run.pid && !finished) {
+    await terminateGroup(run.pid);
   }
   run.status = 'killed';
   run.endedAt = new Date().toISOString();
@@ -191,6 +232,9 @@ export function metricsFileFor(runId: string): string {
  * why a run that finished while the watcher was down still gets a status.
  */
 export async function reconcile(run: Run): Promise<Run> {
+  // Only a run we still think is running can be reconciled. A killed run has
+  // an operator's decision recorded against it, and the wrapper's exit code
+  // must not overwrite that with 'failed'.
   if (run.status !== 'running') return run;
   if (isAlive(run.pid) && !existsSync(exitCodePath(run.id))) return run;
 

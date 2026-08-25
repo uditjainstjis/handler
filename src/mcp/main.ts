@@ -41,13 +41,20 @@ function buildServer(): McpServer {
 
 async function main() {
   await ensureRoot();
+
+  if (!TOKEN) {
+    process.stderr.write('Refusing to start without an MCP token — that would serve kill_run to anyone.\n');
+    process.exit(1);
+  }
   const app = express();
   app.use(express.json({ limit: '4mb' }));
 
   app.get('/healthz', (_req, res) => res.json({ ok: true, server: 'handler-ops', authenticated: Boolean(TOKEN) }));
 
   app.use('/mcp', (req, res, next) => {
-    if (!TOKEN) return next();
+    // Fail closed. An empty token must never mean "let everyone in" — these
+    // tools kill training runs, and a misconfiguration should stop the server
+    // being useful, not stop it being safe.
     const presented = req.header('x-handler-token') ?? '';
     // Length-independent compare would be nicer, but the timing signal on a
     // loopback secret is not the threat here; a missing check is.

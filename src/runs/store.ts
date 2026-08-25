@@ -5,6 +5,7 @@
  * the run itself writes. Deliberately boring: a judge should be able to `cat`
  * any of it, and HANDLER should survive its own restart without a database.
  */
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -92,7 +93,10 @@ export async function ensureRoot(): Promise<void> {
  * slightly stale one.
  */
 async function writeAtomic(file: string, contents: string): Promise<void> {
-  const temporary = `${file}.${process.pid}.tmp`;
+  // pid alone is not unique enough: two concurrent saves inside one process
+  // (the watcher escalating while the console reads) would share the file and
+  // interleave.
+  const temporary = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   await writeFile(temporary, contents);
   await rename(temporary, file);
 }
