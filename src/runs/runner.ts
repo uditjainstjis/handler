@@ -19,6 +19,7 @@ export type StartRunOptions = {
   cwd?: string;
   config?: Record<string, unknown>;
   budgetUsd?: number;
+  configName?: string;
 };
 
 export async function startRun(options: StartRunOptions): Promise<Run> {
@@ -35,6 +36,7 @@ export async function startRun(options: StartRunOptions): Promise<Run> {
     startedAt: new Date().toISOString(),
     config: options.config ?? {},
     budgetUsd: options.budgetUsd,
+    configName: options.configName,
   };
 
   const out = createWriteStream(logPath(id), { flags: 'a' });
@@ -113,6 +115,7 @@ export async function relaunchRun(
     cwd: parent.cwd,
     config: { ...parent.config, ...overrides, relaunchedFrom: parent.id },
     budgetUsd: parent.budgetUsd,
+    configName: parent.configName,
   });
   return child;
 }
