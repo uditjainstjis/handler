@@ -80,19 +80,25 @@ Then click **Approve** on the next proposal.
 **On screen:** terminal (D).
 
 ```bash
-pkill -f trueforge && pkill -f "watcher/main.ts"
-# … restart both …
-npx @truefoundry/trueforge &
-npm run watch
+pkill -f trueforge/dist/main.js          # the harness itself, gone
+npx @truefoundry/trueforge &             # bring it back
+npm run handler -- poke <run-id> "Did you survive the restart?"
 ```
 
-> A watch runs for hours. Both of these *will* restart inside one. The session
+> A watch runs for hours, and the harness *will* restart inside one. The session
 > id lives on the run record, on disk —
 
-Watcher prints `[resumed existing session]`.
+Terminal prints:
 
-> — so it rejoins the same conversation, with everything it had already worked
-> out still in it. Nothing is re-derived.
+```
+resumed existing session 01m0ww40n2jq3dcrkk7qxt959x —
+everything it already worked out is still there
+```
+
+> — so it rejoins the same conversation. Nothing is re-derived.
+
+**Verified, not staged:** this is a real kill of the TrueForge process and a
+real reconnect afterwards.
 
 ## 2:40 — the loop closes (20s)
 
@@ -118,6 +124,9 @@ Watcher prints `[resumed existing session]`.
   backoff.
 - Have a **second terminal with a finished incident** ready. If a 429 lands
   mid-take, cut to that rather than restarting the whole run.
-- Don't show the API key panel in TrueForge settings on camera.
+- Don't show the API key panel in TrueForge settings on camera, and don't show
+  `.handler/mcp-token`.
+- `npm run handler -- transcript <run-id> artifacts/run.md` exports what
+  happened, if you want a still to cut to.
 - Record the reject-then-approve sequence in one take if possible — the
   rejection reason going back to the agent is the most convincing single beat.

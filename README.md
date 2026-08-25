@@ -196,8 +196,10 @@ tests/             detectors and the safety guards
 ```
 
 ```bash
-npm test          # 19 tests
-npm run typecheck
+npm test                          # 29 tests
+npm run handler -- doctor         # check every moving part, name what is missing
+npm run handler -- transcript <run-id>   # export what HANDLER did, as markdown
+npm run handler -- poke <run-id>         # follow-up question; resumes the session
 ```
 
 The tests worth reading are `tests/safety.test.ts` — path traversal, the
@@ -215,13 +217,19 @@ leaks onto a command line. Everything else is recoverable; those are not.
 | `HANDLER_POLL_MS` | `3000` | watcher interval |
 | `HANDLER_STALL_SECONDS` | `25` | silence before a live run counts as stalled |
 | `HANDLER_ALLOW_PR` | unset | `1` lets HANDLER push branches and open PRs |
+| `HANDLER_MCP_TOKEN` | generated | shared secret; auto-created at `.handler/mcp-token` |
+| `HANDLER_MCP_HOST` | `127.0.0.1` | these tools kill training runs — keep it on loopback |
 | `HANDLER_HOME` | `./.handler` | run state |
 
 ## Qodo Code Review Evidence
 
-Every substantive change reached `main` through a reviewed pull request; the
-only direct commit is the empty scaffold. See
-[**QODO.md**](QODO.md) for the reviewed PRs and what the review changed.
+Every substantive change goes through a pull request that Qodo reviews before
+it merges; the only direct commit to `main` is the empty scaffold. Qodo raised
+**31 findings**, and [#10](https://github.com/uditjainstjis/handler/pull/10)
+acts on eight of them — including a prompt-injection path through training-run
+logs that I had missed entirely.
+
+See [**QODO.md**](QODO.md) for the full list and what each review changed.
 
 ## AI assistance
 

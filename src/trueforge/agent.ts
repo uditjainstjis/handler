@@ -13,6 +13,7 @@
  *   ask_user_questions when the evidence genuinely does not decide it, ask
  */
 import { type AgentSpec, upsertAgent, upsertMcpServer } from './client.ts';
+import { mcpToken } from '../runs/token.ts';
 
 export const AGENT_NAME = 'handler';
 export const MCP_SERVER_NAME = 'handler-ops';
@@ -120,7 +121,7 @@ export function buildAgentSpec(model: string): AgentSpec {
 }
 
 export async function provision(model: string, mcpUrl: string): Promise<{ agentId: string }> {
-  const token = process.env.HANDLER_MCP_TOKEN;
+  const token = mcpToken();
   await upsertMcpServer({
     type: 'remote',
     name: MCP_SERVER_NAME,
