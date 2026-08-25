@@ -4,11 +4,18 @@
  * Only the parts HANDLER needs: register the MCP server, upsert the agent,
  * create or resume a session, drive turns, and answer approval prompts.
  */
-const BASE = process.env.TRUEFORGE_URL ?? 'http://localhost:8790';
-const API = `${BASE}/api/v1`;
+/**
+ * Read the base URL per call rather than capturing it at import time. Module
+ * scope freezes whatever the environment happened to be when the first import
+ * ran, which makes the client untestable against a stub and silently ignores
+ * anything that sets TRUEFORGE_URL later.
+ */
+function base(): string {
+  return process.env.TRUEFORGE_URL ?? 'http://localhost:8790';
+}
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
+  const response = await fetch(`${base()}/api/v1${path}`, {
     ...init,
     headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
   });
@@ -143,20 +150,57 @@ export async function listTurns(sessionId: string): Promise<Array<{ id: string; 
   return out.data ?? [];
 }
 
-/** Approval prompts the harness is currently blocked on, newest last. */
+type ModelToolCall = {
+  id: string;
+  name?: string;
+  arguments?: unknown;
+  function?: { name?: string; arguments?: string };
+};
+
+/** Tool calls carry their name and arguments nested under `function`. */
+function describeCall(call: ModelToolCall): { name: string; arguments: unknown } {
+  const name = call.function?.name ?? call.name ?? 'unknown tool';
+  const raw = call.function?.arguments ?? call.arguments;
+  if (typeof raw !== 'string') return { name, arguments: raw };
+  try {
+    return { name, arguments: JSON.parse(raw) };
+  } catch {
+    return { name, arguments: raw };
+  }
+}
+
+/**
+ * Approval prompts the harness is currently blocked on, newest last.
+ *
+ * `tool.approval_required` carries only `{ id, source_event_id }` per call —
+ * no name, no arguments. Those live on the `model.message` event that
+ * requested the call, which `source_event_id` points at. Reading `.name`
+ * straight off the ref yields undefined, and an approval card that says
+ * "undefined" is worse than no card: the whole point is that a human can see
+ * what they are being asked to allow.
+ */
 export async function pendingApprovals(sessionId: string): Promise<
   Array<{ threadId: string; toolCallId: string; name: string; arguments: unknown; at: string }>
 > {
   const events = await listSessionEvents(sessionId);
+
+  const byEventId = new Map<string, SessionEvent>();
+  for (const event of events) if (event.id) byEventId.set(event.id, event);
+
   const pending = new Map<string, { threadId: string; toolCallId: string; name: string; arguments: unknown; at: string }>();
   for (const event of events) {
     if (event.type === 'tool.approval_required') {
-      for (const call of event.tool_calls ?? []) {
-        pending.set(call.id, {
+      for (const ref of (event.tool_calls ?? []) as Array<{ id: string; source_event_id?: string }>) {
+        const source = ref.source_event_id ? byEventId.get(ref.source_event_id) : undefined;
+        const call =
+          ((source?.tool_calls ?? []) as ModelToolCall[]).find(c => c.id === ref.id) ??
+          (ref as unknown as ModelToolCall);
+        const { name, arguments: args } = describeCall(call);
+        pending.set(ref.id, {
           threadId: event.thread_id ?? '',
-          toolCallId: call.id,
-          name: call.name,
-          arguments: call.arguments,
+          toolCallId: ref.id,
+          name,
+          arguments: args,
           at: event.created_at,
         });
       }
@@ -186,5 +230,5 @@ export async function decideApproval(
 }
 
 export function chatUrlFor(sessionId: string): string {
-  return `${BASE}/?session=${sessionId}`;
+  return `${base()}/?session=${sessionId}`;
 }

@@ -28,16 +28,22 @@ export function parseRetryAfterMs(message: string): number {
 }
 
 export async function lastTurnOutcome(sessionId: string): Promise<TurnOutcome> {
-  const events = await listSessionEvents(sessionId);
-  // listSessionEvents already returns them oldest-first.
-  const done = events.filter(event => event.type === 'turn.done').pop() as
-    | { state?: { status?: string; message?: string } }
-    | undefined;
+  const [events, turns] = await Promise.all([listSessionEvents(sessionId), listTurns(sessionId)]);
+  if (turns.length === 0) return { state: 'done' };
 
-  if (!done) {
-    const turns = await listTurns(sessionId);
-    return turns.length ? { state: 'running' } : { state: 'done' };
-  }
+  // Scope to the CURRENT turn. Taking the last turn.done in the whole session
+  // means a 429 from three turns ago still reads as "rate limited" — and the
+  // caller would then post "carry on" into a session that is actually sitting
+  // on an approval gate, waiting for a human. Nudging an agent mid-gate is a
+  // good way to lose the decision a person was about to make.
+  const currentTurnId = turns[turns.length - 1]?.id;
+  const done = events.find(
+    event => event.type === 'turn.done' && (event as { turn_id?: string }).turn_id === currentTurnId,
+  ) as { state?: { status?: string; message?: string } } | undefined;
+
+  // No terminal event for the current turn: it is still running, which includes
+  // being paused on an approval. Leave it alone.
+  if (!done) return { state: 'running' };
 
   const status = done.state?.status;
   const message = done.state?.message ?? '';
