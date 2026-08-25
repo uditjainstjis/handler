@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseRetryAfterMs } from '../src/watcher/retry.ts';
+import { backoffMs, parseRetryAfterMs } from '../src/watcher/retry.ts';
 
 test('honours the delay the provider actually asked for', () => {
   const gemini =
@@ -24,4 +24,18 @@ test('falls back to a conservative wait when no delay is given', () => {
 
 test('a sub-second delay still rounds up to a real wait', () => {
   assert.equal(parseRetryAfterMs('please retry in 0.5s'), 500);
+});
+
+test('the first retry trusts the provider, later ones stop believing it', () => {
+  // A per-minute limit and a spent daily quota produce the same 429 and the
+  // same "retry in ~57s". Only whether retrying works tells them apart.
+  assert.equal(backoffMs(57_000, 0), 57_000);
+  assert.equal(backoffMs(57_000, 1), 57_000);
+  assert.equal(backoffMs(57_000, 2), 114_000);
+  assert.equal(backoffMs(57_000, 3), 228_000);
+});
+
+test('backoff is capped so a watch never goes silent for hours', () => {
+  assert.equal(backoffMs(57_000, 20), 30 * 60 * 1000);
+  assert.ok(backoffMs(45_000, 99) <= 30 * 60 * 1000);
 });

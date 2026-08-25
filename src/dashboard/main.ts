@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { latestIncident, listRuns, loadRun, readLog, readMetrics } from '../runs/store.ts';
 import { isAlive } from '../runs/runner.ts';
 import { chatUrlFor, decideApproval, isUp, pendingApprovals } from '../trueforge/client.ts';
+import { lastTurnOutcome } from '../watcher/retry.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.HANDLER_DASHBOARD_PORT ?? 8812);
@@ -35,9 +36,17 @@ app.get('/api/state', async (_req, res) => {
       const last = metrics[metrics.length - 1];
 
       let approvals: Awaited<ReturnType<typeof pendingApprovals>> = [];
+      // "The agent is thinking" and "the agent is wedged on a spent quota" look
+      // identical on a dashboard that only renders approvals. Say which.
+      let stalled: string | null = null;
       if (trueforgeUp && run.sessionId) {
         try {
           approvals = await pendingApprovals(run.sessionId);
+          if (approvals.length === 0) {
+            const outcome = await lastTurnOutcome(run.sessionId);
+            if (outcome.state === 'rate-limited') stalled = 'waiting on the model provider (rate limited)';
+            else if (outcome.state === 'error') stalled = `turn failed: ${outcome.message.slice(0, 140)}`;
+          }
         } catch {
           // A session the harness has since forgotten is not an error here.
         }
@@ -59,6 +68,7 @@ app.get('/api/state', async (_req, res) => {
         lastLoss: last?.loss ?? null,
         lastVal: last?.val_loss ?? null,
         curve,
+        stalled,
         incident: incident
           ? {
               id: incident.id,

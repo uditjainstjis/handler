@@ -198,6 +198,7 @@ function runCard(run) {
         ${run.budgetUsd ? `<div>budget <b>$${run.budgetUsd}</b></div>` : ''}
         ${run.exitCode !== null && run.exitCode !== undefined ? `<div>exit <b>${run.exitCode}</b></div>` : ''}
         ${run.sessionUrl ? `<div><a href="${esc(run.sessionUrl)}" target="_blank">session ↗</a></div>` : ''}
+        ${run.stalled ? `<div style="color:var(--amber)">⏳ ${esc(run.stalled)}</div>` : ''}
       </div>
       <div>${sparkline(run.curve)}</div>
       ${findingCard(run.incident)}
