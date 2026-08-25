@@ -1,0 +1,76 @@
+/**
+ * Turns that die on a provider rate limit.
+ *
+ * A watch is a long-lived, low-urgency workload pointed at whatever model
+ * provider the operator happened to configure — including free tiers that
+ * allow a handful of requests per minute. An incident that gives up because
+ * the provider said "retry in 32s" is worse than useless: it looks like a
+ * diagnosis that failed rather than one that never ran.
+ *
+ * So the watcher treats a rate-limited turn as unfinished work and picks it up
+ * again, honouring the delay the provider asked for.
+ */
+import { listTurns, listSessionEvents, postTurn } from '../trueforge/client.ts';
+
+const RATE_LIMITED = /\b429\b|rate.?limit|quota/i;
+
+export type TurnOutcome =
+  | { state: 'running' }
+  | { state: 'done' }
+  | { state: 'rate-limited'; retryAfterMs: number; message: string }
+  | { state: 'error'; message: string };
+
+/** Providers phrase this differently; take the first plausible seconds value. */
+export function parseRetryAfterMs(message: string): number {
+  const explicit = /retry (?:in|after)\s+([\d.]+)\s*s/i.exec(message);
+  if (explicit) return Math.ceil(Number(explicit[1]) * 1000);
+  return 45_000;
+}
+
+export async function lastTurnOutcome(sessionId: string): Promise<TurnOutcome> {
+  const events = await listSessionEvents(sessionId);
+  const done = events
+    .filter(event => event.type === 'turn.done')
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .pop() as { state?: { status?: string; message?: string } } | undefined;
+
+  if (!done) {
+    const turns = await listTurns(sessionId);
+    return turns.length ? { state: 'running' } : { state: 'done' };
+  }
+
+  const status = done.state?.status;
+  const message = done.state?.message ?? '';
+  if (status === 'error' && RATE_LIMITED.test(message)) {
+    return { state: 'rate-limited', retryAfterMs: parseRetryAfterMs(message), message };
+  }
+  if (status === 'error') return { state: 'error', message };
+  return { state: 'done' };
+}
+
+/**
+ * Nudges a session whose last turn died on a rate limit. Returns true when a
+ * retry was actually posted, so the caller can log it honestly.
+ */
+export async function retryIfRateLimited(
+  sessionId: string,
+  attempt: number,
+  maxAttempts: number,
+): Promise<{ retried: boolean; waitedMs?: number; reason?: string }> {
+  const outcome = await lastTurnOutcome(sessionId);
+  if (outcome.state !== 'rate-limited') return { retried: false, reason: outcome.state };
+  if (attempt >= maxAttempts) return { retried: false, reason: 'attempts exhausted' };
+
+  const wait = outcome.retryAfterMs;
+  await new Promise(resolve => setTimeout(resolve, wait));
+  await postTurn(sessionId, [
+    {
+      type: 'user.message',
+      content:
+        'The previous turn was cut off by a provider rate limit, not by anything you did. ' +
+        'Carry on from where you were. Prefer fewer, larger tool calls — pull the whole metrics ' +
+        'CSV once rather than sampling it repeatedly — because model calls are the scarce resource here.',
+    },
+  ]);
+  return { retried: true, waitedMs: wait };
+}

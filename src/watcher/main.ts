@@ -21,6 +21,7 @@ import {
 } from '../runs/store.ts';
 import { isAlive } from '../runs/runner.ts';
 import { detect } from './detectors.ts';
+import { retryIfRateLimited } from './retry.ts';
 import { AGENT_NAME, MCP_SERVER_NAME, provision } from '../trueforge/agent.ts';
 import { chatUrlFor, createSession, isUp, postTurn, sessionExists } from '../trueforge/client.ts';
 
@@ -28,6 +29,10 @@ const POLL_MS = Number(process.env.HANDLER_POLL_MS ?? 3000);
 const STALL_SECONDS = Number(process.env.HANDLER_STALL_SECONDS ?? 25);
 const MODEL = process.env.HANDLER_MODEL ?? 'anthropic/claude-sonnet-4-6';
 const MCP_URL = process.env.HANDLER_MCP_URL ?? 'http://localhost:8811/mcp';
+const MAX_RATE_LIMIT_RETRIES = Number(process.env.HANDLER_RATE_LIMIT_RETRIES ?? 8);
+
+/** Retry counters per session, so a permanently throttled key cannot loop forever. */
+const retryAttempts = new Map<string, number>();
 
 function log(message: string): void {
   process.stdout.write(`[watcher ${new Date().toISOString().slice(11, 19)}] ${message}\n`);
@@ -113,7 +118,37 @@ async function tick(): Promise<void> {
       stallSeconds: STALL_SECONDS,
       now,
     });
-    if (detection) await escalate(run, detection);
+    if (detection) {
+      await escalate(run, detection);
+      // One escalation per tick. Two incidents opening at once doubles the
+      // request rate at the model provider, and the second one is what gets
+      // throttled — so it would arrive looking like a failed diagnosis.
+      return;
+    }
+  }
+
+  await resumeRateLimited();
+}
+
+/**
+ * Incidents whose turn died on a provider rate limit are unfinished, not
+ * failed. Pick them back up rather than leaving a half-written diagnosis.
+ */
+async function resumeRateLimited(): Promise<void> {
+  for (const summary of await listRuns()) {
+    const run = await loadRun(summary.id);
+    if (!run?.sessionId || !run.incidentOpenedAt) continue;
+
+    const attempt = retryAttempts.get(run.sessionId) ?? 0;
+    const result = await retryIfRateLimited(run.sessionId, attempt, MAX_RATE_LIMIT_RETRIES);
+    if (result.retried) {
+      retryAttempts.set(run.sessionId, attempt + 1);
+      log(
+        `resumed ${run.id} after a provider rate limit ` +
+          `(waited ${Math.round((result.waitedMs ?? 0) / 1000)}s, attempt ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES})`,
+      );
+      return;
+    }
   }
 }
 
