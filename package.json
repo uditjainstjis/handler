@@ -1,0 +1,35 @@
+{
+  "name": "handler",
+  "version": "0.1.0",
+  "description": "HANDLER — the agent that watches your training runs.",
+  "main": "index.js",
+  "scripts": {
+    "mcp": "node src/mcp/main.ts",
+    "watch": "node src/watcher/main.ts",
+    "dashboard": "node src/dashboard/main.ts",
+    "handler": "node src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uditjainstjis/handler.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/uditjainstjis/handler/issues"
+  },
+  "homepage": "https://github.com/uditjainstjis/handler#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  }
+}
