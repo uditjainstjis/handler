@@ -29,10 +29,10 @@ export function parseRetryAfterMs(message: string): number {
 
 export async function lastTurnOutcome(sessionId: string): Promise<TurnOutcome> {
   const events = await listSessionEvents(sessionId);
-  const done = events
-    .filter(event => event.type === 'turn.done')
-    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
-    .pop() as { state?: { status?: string; message?: string } } | undefined;
+  // listSessionEvents already returns them oldest-first.
+  const done = events.filter(event => event.type === 'turn.done').pop() as
+    | { state?: { status?: string; message?: string } }
+    | undefined;
 
   if (!done) {
     const turns = await listTurns(sessionId);

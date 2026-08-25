@@ -124,8 +124,15 @@ export type SessionEvent = {
 };
 
 export async function listSessionEvents(sessionId: string): Promise<SessionEvent[]> {
-  const out = await call<{ data: SessionEvent[] }>(`/sessions/${sessionId}/events`);
-  return out.data ?? [];
+  // Each element is a { turn_id, event } envelope, not a bare event. Reading
+  // `.type` off the envelope silently yields undefined, which makes every
+  // event-type filter match nothing — approvals included.
+  const out = await call<{ data: Array<{ turn_id?: string; event: SessionEvent }> }>(
+    `/sessions/${sessionId}/events`,
+  );
+  return (out.data ?? [])
+    .map(entry => (entry?.event ? { ...entry.event, turn_id: entry.turn_id } : (entry as unknown as SessionEvent)))
+    .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
 }
 
 export async function listTurns(sessionId: string): Promise<Array<{ id: string; state?: { status?: string } }>> {
