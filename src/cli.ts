@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { ensureRoot, latestIncident, listRuns, loadRun, readLog, readMetrics } from './runs/store.ts';
 import { isAlive, startRun } from './runs/runner.ts';
 import { commandFor, listConfigs, loadConfig } from './runs/config.ts';
+import { doctor } from './doctor.ts';
 import { AGENT_NAME, provision } from './trueforge/agent.ts';
 import { chatUrlFor, decideApproval, isUp, listModels, pendingApprovals } from './trueforge/client.ts';
 
@@ -191,6 +192,7 @@ function usage(): void {
   approve <run-id>             allow the pending action
   reject <run-id> [reason]     deny it
   provision                    register the MCP server and agent with TrueForge
+  doctor                       check every moving part and name what is missing
 `);
 }
 
@@ -213,6 +215,9 @@ async function main(): Promise<void> {
       return decide(rest[0], false, rest.slice(1).join(' ') || 'rejected by operator');
     case 'provision':
       return cmdProvision();
+    case 'doctor':
+      process.exitCode = await doctor();
+      return;
     default:
       usage();
   }
