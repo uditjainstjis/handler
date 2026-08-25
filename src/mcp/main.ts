@@ -17,6 +17,14 @@ import { registerTools } from './tools.ts';
 import { ensureRoot } from '../runs/store.ts';
 
 const PORT = Number(process.env.HANDLER_MCP_PORT ?? 8811);
+// Loopback by default. These tools kill training runs; the wildcard host would
+// hand that to anything that can route to this machine.
+const HOST = process.env.HANDLER_MCP_HOST ?? '127.0.0.1';
+// MCP annotations are metadata TrueForge consults when deciding what to gate.
+// They are not enforcement: a client calling this endpoint directly never goes
+// near the harness, so kill_run would just run. A shared secret is what stops
+// that, and the harness sends it as a static header.
+const TOKEN = process.env.HANDLER_MCP_TOKEN ?? '';
 
 function buildServer(): McpServer {
   const server = new McpServer(
@@ -35,7 +43,23 @@ async function main() {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
 
-  app.get('/healthz', (_req, res) => res.json({ ok: true, server: 'handler-ops' }));
+  app.get('/healthz', (_req, res) => res.json({ ok: true, server: 'handler-ops', authenticated: Boolean(TOKEN) }));
+
+  app.use('/mcp', (req, res, next) => {
+    if (!TOKEN) return next();
+    const presented = req.header('x-handler-token') ?? '';
+    // Length-independent compare would be nicer, but the timing signal on a
+    // loopback secret is not the threat here; a missing check is.
+    if (presented !== TOKEN) {
+      res.status(401).json({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'Unauthorized: x-handler-token missing or wrong.' },
+        id: null,
+      });
+      return;
+    }
+    next();
+  });
 
   app.post('/mcp', async (req, res) => {
     const server = buildServer();
@@ -70,8 +94,11 @@ async function main() {
   app.get('/mcp', notAllowed);
   app.delete('/mcp', notAllowed);
 
-  app.listen(PORT, () => {
-    process.stdout.write(`handler-ops MCP listening on http://localhost:${PORT}/mcp\n`);
+  app.listen(PORT, HOST, () => {
+    process.stdout.write(
+      `handler-ops MCP listening on http://${HOST}:${PORT}/mcp ` +
+        `(${TOKEN ? 'token required' : 'no token — set HANDLER_MCP_TOKEN'})\n`,
+    );
   });
 }
 
