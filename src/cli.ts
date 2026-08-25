@@ -11,8 +11,20 @@ import { ensureRoot, latestIncident, listRuns, loadRun, readLog, readMetrics } f
 import { isAlive, reconcile, startRun } from './runs/runner.ts';
 import { commandFor, listConfigs, loadConfig } from './runs/config.ts';
 import { doctor } from './doctor.ts';
+import { transcript } from './transcript.ts';
 import { AGENT_NAME, provision } from './trueforge/agent.ts';
-import { chatUrlFor, decideApproval, isUp, listModels, pendingApprovals } from './trueforge/client.ts';
+import {
+  chatUrlFor,
+  createSession,
+  decideApproval,
+  isUp,
+  listModels,
+  pendingApprovals,
+  postTurn,
+  sessionExists,
+} from './trueforge/client.ts';
+import { AGENT_NAME as HANDLER_AGENT } from './trueforge/agent.ts';
+import { saveRun } from './runs/store.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TRAINER = path.resolve(HERE, '..', 'fixtures', 'trainer.py');
@@ -160,6 +172,41 @@ async function decide(runId: string, allow: boolean, reason: string): Promise<vo
   }
 }
 
+/**
+ * Ask HANDLER a follow-up about a run it is already watching.
+ *
+ * This is the operator's way back into an incident — "why that threshold?",
+ * "what about the batch size?" — without opening the harness UI. It goes
+ * through the same resume path the watcher uses, so it also demonstrates the
+ * thing that is otherwise hard to see: the conversation survives everything
+ * underneath it restarting.
+ */
+async function cmdPoke(runId: string, message: string[]): Promise<void> {
+  const run = await loadRun(runId);
+  if (!run) {
+    console.error(`No run ${runId}.`);
+    process.exit(1);
+  }
+
+  const resumed = Boolean(run.sessionId) && (await sessionExists(run.sessionId!));
+  let sessionId = run.sessionId;
+  if (!resumed) {
+    sessionId = await createSession(HANDLER_AGENT);
+    run.sessionId = sessionId;
+    await saveRun(run);
+  }
+
+  console.log(
+    resumed
+      ? `resumed existing session ${sessionId} — everything it already worked out is still there`
+      : `no session survived, started a new one: ${sessionId}`,
+  );
+
+  const text = message.join(' ') || 'Where had you got to on this run?';
+  await postTurn(sessionId!, [{ type: 'user.message', content: text }]);
+  console.log(`  ${chatUrlFor(sessionId!)}`);
+}
+
 async function cmdProvision(): Promise<void> {
   if (!(await isUp())) {
     console.error('TrueForge is not running. Start it with: npx @truefoundry/trueforge');
@@ -189,6 +236,8 @@ function usage(): void {
                                modes: ${FAIL_MODES.join(' | ')}
   ls                           list runs, incidents and root causes
   logs <run-id> [lines]        tail a run's output
+  transcript <run-id> [file]   export what HANDLER did, as readable markdown
+  poke <run-id> [message]      ask HANDLER a follow-up; resumes its session
   approvals                    show what HANDLER is waiting on you for
   approve <run-id>             allow the pending action
   reject <run-id> [reason]     deny it
@@ -214,6 +263,19 @@ async function main(): Promise<void> {
       return decide(rest[0], true, '');
     case 'reject':
       return decide(rest[0], false, rest.slice(1).join(' ') || 'rejected by operator');
+    case 'transcript': {
+      const { writeFile } = await import('node:fs/promises');
+      const markdown = await transcript(rest[0]);
+      if (rest[1]) {
+        await writeFile(rest[1], markdown);
+        console.log(`wrote ${rest[1]} (${markdown.length} bytes)`);
+      } else {
+        console.log(markdown);
+      }
+      return;
+    }
+    case 'poke':
+      return cmdPoke(rest[0], rest.slice(1));
     case 'provision':
       return cmdProvision();
     case 'doctor':

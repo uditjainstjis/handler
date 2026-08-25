@@ -15,6 +15,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 
 import { registerTools } from './tools.ts';
 import { ensureRoot } from '../runs/store.ts';
+import { mcpToken, tokenSource } from '../runs/token.ts';
 
 const PORT = Number(process.env.HANDLER_MCP_PORT ?? 8811);
 // Loopback by default. These tools kill training runs; the wildcard host would
@@ -24,7 +25,7 @@ const HOST = process.env.HANDLER_MCP_HOST ?? '127.0.0.1';
 // They are not enforcement: a client calling this endpoint directly never goes
 // near the harness, so kill_run would just run. A shared secret is what stops
 // that, and the harness sends it as a static header.
-const TOKEN = process.env.HANDLER_MCP_TOKEN ?? '';
+const TOKEN = mcpToken();
 
 function buildServer(): McpServer {
   const server = new McpServer(
@@ -97,7 +98,7 @@ async function main() {
   app.listen(PORT, HOST, () => {
     process.stdout.write(
       `handler-ops MCP listening on http://${HOST}:${PORT}/mcp ` +
-        `(${TOKEN ? 'token required' : 'no token — set HANDLER_MCP_TOKEN'})\n`,
+        `(token required, from ${tokenSource()})\n`,
     );
   });
 }

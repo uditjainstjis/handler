@@ -11,6 +11,7 @@ import { listRuns } from './runs/store.ts';
 import { isUp, listMcpTools, listModels } from './trueforge/client.ts';
 import { MCP_SERVER_NAME } from './trueforge/agent.ts';
 import { pullRequestsEnabled } from './mcp/pullRequest.ts';
+import { mcpToken, tokenSource } from './runs/token.ts';
 
 type Check = {
   name: string;
@@ -76,6 +77,30 @@ export async function doctor(): Promise<number> {
   }
 
   const mcpOk = await reachable(MCP_URL.replace(/\/mcp$/, '/healthz'));
+  if (mcpOk) {
+    // A token mismatch between the server and what the harness was told shows
+    // up as a 401 buried inside a turn error, which is a miserable way to find
+    // out. Check it directly.
+    const probe = await fetch(MCP_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'x-handler-token': mcpToken(),
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      signal: AbortSignal.timeout(4000),
+    }).catch(() => undefined);
+    checks.push({
+      name: 'MCP token',
+      ok: probe?.status === 200,
+      detail:
+        probe?.status === 200
+          ? `accepted (from ${tokenSource()})`
+          : `the running MCP server rejects this token (HTTP ${probe?.status ?? 'no response'})`,
+      fix: 'restart the MCP server so it reads the same token, then: npm run handler -- provision',
+    });
+  }
   checks.push({
     name: 'handler-ops MCP server',
     ok: mcpOk,
