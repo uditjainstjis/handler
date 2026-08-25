@@ -84,8 +84,16 @@ export function buildAgentSpec(model: string): AgentSpec {
       {
         name: MCP_SERVER_NAME,
         enable_tools: ['@all'],
-        // Read tools stay loaded; the agent almost always needs them first.
-        preload_tools: ['list_runs', 'get_run', 'tail_log', 'get_metrics'],
+        // Load all 17 schemas upfront. Deferred discovery is the right default
+        // when an agent faces many servers with hundreds of tools, but here it
+        // is a straight loss: one server, 17 tools, and every deferred tool
+        // costs a `list_tools` + `get_tool_info` round trip before the agent
+        // can do anything. Measured against a rate-limited provider that was
+        // three wasted model calls before the first real one.
+        //
+        // Note `preload_tools: [...]` is NOT the way to do this — a non-empty
+        // list implies `preload: false` and leaves everything else deferred.
+        preload: true,
         // Belt and braces: the tags catch anything annotated destructive or
         // write, and the literal names survive an annotation being wrong.
         require_approval_for_tools: [

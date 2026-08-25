@@ -61,7 +61,9 @@ export async function upsertAgent(name: string, manifest: AgentSpec): Promise<{ 
   const existing = await call<{ data: Array<{ id: string; name: string }> }>('/agents');
   const found = (existing.data ?? []).find(agent => agent.name === name);
   if (found) {
-    await call(`/agents/${found.id}`, { method: 'PUT', body: JSON.stringify({ name, manifest }) });
+    // UpdateAgentRequest takes the manifest only — the name is in the path and
+    // sending it again is rejected as an unrecognized key.
+    await call(`/agents/${found.id}`, { method: 'PUT', body: JSON.stringify({ manifest }) });
     return found;
   }
   const created = await call<{ data: { id: string; name: string } }>('/agents', {
