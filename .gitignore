@@ -2,3 +2,6 @@ node_modules/
 .handler/
 *.log
 .DS_Store
+
+# Exported transcripts are generated evidence, not source.
+artifacts/
