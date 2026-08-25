@@ -32,6 +32,8 @@ import {
   saveRun,
 } from '../runs/store.ts';
 import { isAlive, killRun, relaunchRun } from '../runs/runner.ts';
+import { listConfigs } from '../runs/config.ts';
+import { openFixPullRequest } from './pullRequest.ts';
 
 const text = (value: unknown) => ({
   content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
@@ -374,6 +376,47 @@ export function registerTools(server: McpServer): void {
       }
       return text(`Sent on ${channel}.`);
     },
+  );
+
+  server.registerTool(
+    'open_fix_pull_request',
+    {
+      title: 'Open a pull request with the fix',
+      description:
+        'Turn the diagnosis into a pull request against the training config that caused the failure, so a human and a code reviewer see the patch before it reaches anyone else. Only lr, warmup_steps, grad_clip, batch_size, weight_decay and steps can be changed. Prefer the smallest change that addresses the root cause — a PR that alters five knobs teaches nobody anything when the next run fails.',
+      inputSchema: {
+        run_id: z.string(),
+        config_name: z.string().describe('Config the run was launched from, e.g. "baseline"'),
+        changes: z.record(z.string(), z.number()),
+        title: z.string().describe('PR title — one line, states the fix'),
+        rationale: z.string().describe('The case for this change, citing the numbers you measured.'),
+      },
+      annotations: { title: 'Open a pull request with the fix', ...DESTRUCTIVE },
+    },
+    async ({ run_id, config_name, changes, title, rationale }) => {
+      try {
+        const result = await openFixPullRequest({ runId: run_id, configName: config_name, changes, title, rationale });
+        const incident = await latestIncident(run_id);
+        if (incident) {
+          incident.evidence = { ...incident.evidence, pullRequest: result.url ?? result.note };
+          await saveIncident(incident);
+        }
+        return text(result);
+      } catch (error) {
+        return text(`Could not open the pull request: ${(error as Error).message}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    'list_configs',
+    {
+      title: 'List training configs',
+      description: 'The checked-in training configs runs are launched from.',
+      inputSchema: {},
+      annotations: { title: 'List training configs', ...READ_ONLY },
+    },
+    async () => text(await listConfigs()),
   );
 
   server.registerTool(

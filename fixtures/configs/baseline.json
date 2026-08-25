@@ -1,0 +1,13 @@
+{
+  "name": "mnist-lab baseline",
+  "description": "The config every experiment forks from. Someone removed warmup while chasing a faster first epoch and nobody put it back.",
+  "fail_mode": "nan-loss",
+  "steps": 400,
+  "lr": 0.0003,
+  "warmup_steps": 1,
+  "grad_clip": 0,
+  "batch_size": 32,
+  "weight_decay": 0,
+  "seed": 1337,
+  "budget_usd": 50
+}

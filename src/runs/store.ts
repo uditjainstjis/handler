@@ -25,6 +25,8 @@ export type Run = {
   config: Record<string, unknown>;
   /** Cost guardrail the agent must respect when proposing a relaunch. */
   budgetUsd?: number;
+  /** Checked-in config this run was launched from, so a fix can patch it. */
+  configName?: string;
   /** TrueForge session watching this run. Survives a harness restart. */
   sessionId?: string;
   /** Set once a watcher has escalated, so a flapping run cannot spam sessions. */

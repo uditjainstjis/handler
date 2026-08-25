@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ensureRoot, latestIncident, listRuns, loadRun, readLog, readMetrics } from './runs/store.ts';
 import { isAlive, startRun } from './runs/runner.ts';
+import { commandFor, listConfigs, loadConfig } from './runs/config.ts';
 import { AGENT_NAME, provision } from './trueforge/agent.ts';
 import { chatUrlFor, decideApproval, isUp, listModels, pendingApprovals } from './trueforge/client.ts';
 
@@ -74,6 +75,24 @@ async function cmdDemo(mode: string, stepSeconds: string): Promise<void> {
   });
   console.log(`started ${run.id}  (${preset.label})`);
   console.log(`  ${run.command.join(' ')}`);
+}
+
+async function cmdRun(configName: string, stepSeconds: string): Promise<void> {
+  if (!configName) {
+    console.log(`configs: ${(await listConfigs()).join(', ') || '(none)'}`);
+    return;
+  }
+  const config = await loadConfig(configName);
+  await ensureRoot();
+  const run = await startRun({
+    name: config.name,
+    command: commandFor(config, Number(stepSeconds || 0.25)),
+    config: { ...config },
+    budgetUsd: config.budget_usd,
+    configName,
+  });
+  console.log(`started ${run.id}  from config "${configName}"`);
+  if (config.description) console.log(`  ${config.description}`);
 }
 
 async function cmdList(): Promise<void> {
@@ -162,6 +181,8 @@ async function cmdProvision(): Promise<void> {
 function usage(): void {
   console.log(`handler — the agent that watches your training runs
 
+  run <config> [step-seconds]  launch a run from a checked-in config
+                               (no arg lists available configs)
   demo <mode> [step-seconds]   start a demo run
                                modes: ${FAIL_MODES.join(' | ')}
   ls                           list runs, incidents and root causes
@@ -176,6 +197,8 @@ function usage(): void {
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   switch (command) {
+    case 'run':
+      return cmdRun(rest[0], rest[1]);
     case 'demo':
       return cmdDemo(rest[0] ?? 'nan-loss', rest[1] ?? '0.05');
     case 'ls':
