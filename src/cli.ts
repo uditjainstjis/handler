@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ensureRoot, latestIncident, listRuns, loadRun, readLog, readMetrics } from './runs/store.ts';
-import { isAlive, startRun } from './runs/runner.ts';
+import { isAlive, reconcile, startRun } from './runs/runner.ts';
 import { commandFor, listConfigs, loadConfig } from './runs/config.ts';
 import { doctor } from './doctor.ts';
 import { AGENT_NAME, provision } from './trueforge/agent.ts';
@@ -102,7 +102,8 @@ async function cmdList(): Promise<void> {
     console.log('No runs yet. Try:  npm run handler -- demo nan-loss');
     return;
   }
-  for (const run of runs) {
+  for (const raw of runs) {
+    const run = await reconcile(raw);
     const metrics = await readMetrics(run.id);
     const last = metrics[metrics.length - 1];
     const incident = await latestIncident(run.id);

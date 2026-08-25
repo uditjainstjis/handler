@@ -6,12 +6,19 @@
  * may restart, the run keeps going.
  */
 import { spawn } from 'node:child_process';
-import { createWriteStream } from 'node:fs';
+import { closeSync, openSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { type Run, loadRun, metricsPath, logPath, runDir, saveRun } from './store.ts';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+import { type Run, exitCodePath, loadRun, metricsPath, logPath, runDir, saveRun } from './store.ts';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WRAPPER = path.resolve(HERE, '..', '..', 'scripts', 'run-with-exitcode.sh');
 
 export type StartRunOptions = {
   name: string;
@@ -39,18 +46,42 @@ export async function startRun(options: StartRunOptions): Promise<Run> {
     configName: options.configName,
   };
 
-  const out = createWriteStream(logPath(id), { flags: 'a' });
-  const [bin, ...args] = options.command;
-  const child = spawn(bin, args, {
-    cwd: run.cwd,
-    detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, HANDLER_RUN_ID: id, HANDLER_METRICS_PATH: metricsPath(id) },
+  // Hand the child a file descriptor, not a pipe. A pipe's read end lives in
+  // THIS process: when HANDLER exits the pipe closes, and the run's next log
+  // write gets EPIPE and kills it. A run that dies when its watcher restarts is
+  // the opposite of what 'detached' is for.
+  const logFd = openSync(logPath(id), 'a');
+  let child;
+  try {
+    // Wrapped so the exit code lands in a file. `run.command` stays the real
+    // command, because that is what a human — and the agent — needs to see.
+    child = spawn('/bin/sh', [WRAPPER, exitCodePath(id), ...options.command], {
+      cwd: run.cwd,
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      env: { ...process.env, HANDLER_RUN_ID: id, HANDLER_METRICS_PATH: metricsPath(id) },
+    });
+  } finally {
+    // The child holds its own duplicate; ours would otherwise leak per run.
+    closeSync(logFd);
+  }
+
+  // spawn() reports a missing interpreter asynchronously. Without this the
+  // 'error' event is unhandled and takes the whole process down — so a typo in
+  // a command line kills the watcher rather than failing one run.
+  child.on('error', async (error: Error) => {
+    const current = await loadRun(id);
+    if (!current) return;
+    current.status = 'failed';
+    current.endedAt = new Date().toISOString();
+    current.config = { ...current.config, spawnError: error.message };
+    await saveRun(current);
   });
 
-  child.stdout.pipe(out);
-  child.stderr.pipe(out);
   run.pid = child.pid;
+  // Record the start time from the OS's point of view so a recycled pid cannot
+  // later be mistaken for this run.
+  run.config = { ...run.config, spawnedAt: Date.now() };
   await saveRun(run);
 
   child.on('exit', async (code, signal) => {
@@ -83,11 +114,16 @@ export function isAlive(pid?: number): boolean {
 export async function killRun(runId: string, reason: string): Promise<Run> {
   const run = await loadRun(runId);
   if (!run) throw new Error(`unknown run ${runId}`);
-  if (run.pid && isAlive(run.pid)) {
+
+  // Only signal a run we still believe is ours. A finished run's pid gets
+  // recycled, and killing whatever inherited it would be the single worst
+  // thing this tool could do.
+  const finished = Boolean(run.endedAt) || run.status !== 'running';
+  if (run.pid && !finished && isAlive(run.pid)) {
     try {
       process.kill(run.pid, 'SIGTERM');
     } catch {
-      // Already gone between the liveness check and the signal. Fine.
+      // Gone between the liveness check and the signal. Fine.
     }
   }
   run.status = 'killed';
@@ -144,4 +180,33 @@ export function applyOverrides(
 
 export function metricsFileFor(runId: string): string {
   return path.resolve(metricsPath(runId));
+}
+
+/**
+ * Bring a run's recorded status back in line with reality.
+ *
+ * A detached run outlives the process that spawned it, so the 'exit' handler
+ * above fires only when HANDLER happens to still be alive. The wrapper's
+ * exitcode file is the durable record, and this is what reads it — which is
+ * why a run that finished while the watcher was down still gets a status.
+ */
+export async function reconcile(run: Run): Promise<Run> {
+  if (run.status !== 'running') return run;
+  if (isAlive(run.pid) && !existsSync(exitCodePath(run.id))) return run;
+
+  let code: number | undefined;
+  if (existsSync(exitCodePath(run.id))) {
+    const raw = (await readFile(exitCodePath(run.id), 'utf8')).trim();
+    if (/^\d+$/.test(raw)) code = Number(raw);
+  }
+  // Still running and merely slow to flush — leave it alone.
+  if (code === undefined && isAlive(run.pid)) return run;
+
+  run.exitCode = code;
+  run.endedAt = run.endedAt ?? new Date().toISOString();
+  // No exit code and no process means it was killed or died without the
+  // wrapper getting to write. Either way it is not succeeded.
+  run.status = code === 0 ? 'succeeded' : 'failed';
+  await saveRun(run);
+  return run;
 }

@@ -120,12 +120,16 @@ export function buildAgentSpec(model: string): AgentSpec {
 }
 
 export async function provision(model: string, mcpUrl: string): Promise<{ agentId: string }> {
+  const token = process.env.HANDLER_MCP_TOKEN;
   await upsertMcpServer({
     type: 'remote',
     name: MCP_SERVER_NAME,
     url: mcpUrl,
     description:
       'Operational access to training runs: telemetry, logs, metrics, and gated control (kill, relaunch, page a human).',
+    // TrueForge stores this and sends it on every call, so the harness is the
+    // only client that can reach the destructive tools.
+    ...(token ? { auth: { type: 'header' as const, headers: { 'x-handler-token': token } } } : {}),
   });
   const agent = await upsertAgent(AGENT_NAME, buildAgentSpec(model));
   return { agentId: agent.id };

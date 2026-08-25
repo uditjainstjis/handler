@@ -39,6 +39,7 @@ export type McpServerManifest = {
   name: string;
   url: string;
   description: string;
+  auth?: { type: 'header'; headers: Record<string, string> };
 };
 
 export async function upsertMcpServer(manifest: McpServerManifest): Promise<void> {
@@ -160,8 +161,12 @@ export async function pendingApprovals(sessionId: string): Promise<
         });
       }
     }
-    // Once a call actually ran or was rejected it is no longer pending.
-    if (event.type === 'tool.result' || event.type === 'tool.rejected') {
+    // Once the call has produced a response it is no longer pending, whether
+    // it was allowed and ran or denied and reported back. `tool.response` is
+    // the only event that carries that — there is no `tool.result` or
+    // `tool.rejected` in the schema, and filtering on names that do not exist
+    // means an answered approval never leaves the queue.
+    if (event.type === 'tool.response') {
       const id = (event as { tool_call_id?: string }).tool_call_id;
       if (id) pending.delete(id);
     }

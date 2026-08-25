@@ -15,7 +15,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, readdir, writeFile, mkdir, realpath } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -38,6 +38,31 @@ import { openFixPullRequest } from './pullRequest.ts';
 const text = (value: unknown) => ({
   content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
 });
+
+/**
+ * Confine a path to a directory, following symlinks first.
+ *
+ * `path.resolve` alone is not enough: a symlink inside the run directory
+ * pointing at /etc resolves to a string that still starts with the run
+ * directory, and only realpath tells you where it actually goes. Checks the
+ * nearest existing ancestor, so this also works for a file being created.
+ */
+async function confine(root: string, candidate: string): Promise<string | undefined> {
+  const realRoot = await realpath(root).catch(() => path.resolve(root));
+  let target = path.resolve(root, candidate);
+  let probe = target;
+  for (;;) {
+    const resolved = await realpath(probe).catch(() => undefined);
+    if (resolved) {
+      target = path.join(resolved, path.relative(probe, target));
+      break;
+    }
+    const parent = path.dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  return target === realRoot || target.startsWith(realRoot + path.sep) ? target : undefined;
+}
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 const WRITES = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
@@ -134,18 +159,37 @@ export function registerTools(server: McpServer): void {
       annotations: { title: 'Search run log', ...READ_ONLY },
     },
     async ({ run_id, pattern, max_matches }) => {
-      const log = await readLog(run_id, 100000);
+      // The pattern comes from the model, so it is untrusted input compiled
+      // into a backtracking engine. Nested quantifiers on a long line can hang
+      // the event loop for minutes — and this process is what the whole watch
+      // runs on.
+      if (pattern.length > 200) return text('Refused: pattern too long (max 200 characters).');
+      // A group followed by a quantifier is the precondition for catastrophic
+      // backtracking: (a+)+ and (a|a)* both explode, and neither has anything
+      // in common beyond that shape. Character classes are fine — [a-z]+ is
+      // linear — so this deliberately only looks at ')'.
+      if (/\)[+*{]/.test(pattern)) {
+        return text(
+          'Refused: a repeated group like (…)+ or (…)* can hang the matcher. ' +
+            'Use a pattern without a quantified group, or call tail_log and read it.',
+        );
+      }
       let re: RegExp;
       try {
         re = new RegExp(pattern, 'i');
       } catch (error) {
         return text(`Invalid regular expression: ${(error as Error).message}`);
       }
-      const hits = log
-        .split('\n')
-        .map((line, index) => ({ line: index + 1, textLine: line }))
-        .filter(entry => re.test(entry.textLine))
-        .slice(0, max_matches);
+      // Read only after the guards pass: no point loading a large log to run a
+      // pattern we are going to refuse.
+      const log = await readLog(run_id, 100000);
+      const hits: Array<{ line: number; textLine: string }> = [];
+      const lines = log.split('\n');
+      for (let index = 0; index < lines.length && hits.length < max_matches; index += 1) {
+        // Long lines are where catastrophic backtracking actually bites.
+        const line = lines[index].slice(0, 2000);
+        if (re.test(line)) hits.push({ line: index + 1, textLine: line });
+      }
       return text(hits.length ? hits : `No line matched /${pattern}/.`);
     },
   );
@@ -231,10 +275,10 @@ export function registerTools(server: McpServer): void {
       annotations: { title: 'Read a run file', ...READ_ONLY },
     },
     async ({ run_id, file, max_bytes }) => {
-      const dir = path.resolve(runDir(run_id));
-      const target = path.resolve(dir, file);
-      // A tool the model drives is exactly where a path-traversal bug would land.
-      if (!target.startsWith(dir + path.sep)) return text('Refused: path escapes the run directory.');
+      const target = await confine(runDir(run_id), file);
+      // A tool the model drives is exactly where a path-traversal bug lands,
+      // and a symlink defeats a string-prefix check.
+      if (!target) return text('Refused: path escapes the run directory.');
       if (!existsSync(target)) return text(`No such file: ${file}`);
       const content = await readFile(target, 'utf8');
       return text(content.slice(0, max_bytes));
@@ -301,9 +345,10 @@ export function registerTools(server: McpServer): void {
     },
     async ({ run_id, filename, contents }) => {
       const dir = path.resolve(runDir(run_id), 'patches');
-      const target = path.resolve(dir, filename);
-      if (!target.startsWith(dir + path.sep)) return text('Refused: path escapes the patches directory.');
       await mkdir(dir, { recursive: true });
+      const target = await confine(dir, filename);
+      if (!target) return text('Refused: path escapes the patches directory.');
+      await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, contents);
       return text(`Wrote ${path.relative(runDir(run_id), target)} (${contents.length} bytes). Nothing has been applied.`);
     },
