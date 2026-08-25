@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  type MetricRow,
   type Run,
   ensureRoot,
   listRuns,
@@ -52,6 +53,58 @@ async function sessionFor(run: Run): Promise<{ id: string; resumed: boolean }> {
   return { id, resumed: false };
 }
 
+/**
+ * The detector has already read the log and every metric row. Making the agent
+ * fetch all of it again costs three or four model calls before it has thought
+ * about anything — and model calls are the genuinely scarce resource in a
+ * watch, whether the constraint is a free-tier quota or a monthly bill.
+ *
+ * So the brief carries the evidence. The tools stay available for whatever the
+ * agent decides it needs *next*, which is where they earn their keep.
+ */
+function brief(metrics: MetricRow[], logText: string): string {
+  const losses = metrics.map(r => r.loss).filter((v): v is number => typeof v === 'number');
+  const last = metrics[metrics.length - 1];
+  const summary = {
+    steps: metrics.length,
+    lastStep: last?.step,
+    lastLoss: last?.loss,
+    lastValLoss: last?.val_loss,
+    minLoss: losses.length ? Math.min(...losses) : null,
+    nanSteps: metrics.filter(r => r.loss === null).length,
+    peakGradNorm: Math.max(0, ...metrics.map(r => r.grad_norm ?? 0)),
+    peakMemGb: Math.max(0, ...metrics.map(r => r.mem_gb ?? 0)),
+  };
+
+  // Downsample to ~60 rows: enough to see a trend and cheap enough to inline.
+  const stride = Math.max(1, Math.ceil(metrics.length / 60));
+  const kept = metrics.filter((_, index) => index % stride === 0);
+  if (last && kept[kept.length - 1] !== last) kept.push(last);
+  const csv = [
+    'step,loss,val_loss,lr,grad_norm,mem_gb',
+    ...kept.map(r =>
+      [r.step, r.loss ?? 'nan', r.val_loss ?? '', r.lr ?? '', r.grad_norm ?? '', r.mem_gb ?? ''].join(','),
+    ),
+  ].join('\n');
+
+  return [
+    `Metric summary:`,
+    '```json',
+    JSON.stringify(summary, null, 2),
+    '```',
+    ``,
+    `Metrics (every ${stride} step${stride === 1 ? '' : 's'}) — write this to a file in the sandbox and analyse it:`,
+    '```csv',
+    csv,
+    '```',
+    ``,
+    `Last 40 log lines:`,
+    '```',
+    logText.split('\n').slice(-40).join('\n'),
+    '```',
+  ].join('\n');
+}
+
 async function escalate(run: Run, detection: ReturnType<typeof detect>): Promise<void> {
   if (!detection) return;
 
@@ -69,8 +122,9 @@ async function escalate(run: Run, detection: ReturnType<typeof detect>): Promise
   await saveRun(run);
 
   const { id: sessionId, resumed } = await sessionFor(run);
+  const [metrics, logText] = await Promise.all([readMetrics(run.id), readLog(run.id, 400)]);
 
-  const brief = [
+  const message = [
     `INCIDENT ${incidentId} on run \`${run.id}\` (${run.name}).`,
     ``,
     `Detector: ${detection.detector} (${detection.severity})`,
@@ -82,14 +136,21 @@ async function escalate(run: Run, detection: ReturnType<typeof detect>): Promise
     '```',
     ``,
     `Command: \`${run.command.join(' ')}\``,
+    run.configName ? `Launched from config \`${run.configName}\` — a fix should patch that file.` : '',
     run.budgetUsd ? `Remaining budget: $${run.budgetUsd}.` : `No budget recorded for this run.`,
     ``,
-    `Diagnose it. Use the sandbox for the arithmetic, delegate parallel subagents`,
-    `if more than one cause is plausible, record your finding, then propose the`,
-    `action. I will approve or reject anything irreversible.`,
-  ].join('\n');
+    brief(metrics, logText),
+    ``,
+    `Everything above is already gathered — do not re-fetch it. Diagnose from it,`,
+    `use the sandbox for any arithmetic you need, and delegate a subagent per`,
+    `hypothesis ONLY where these numbers genuinely fail to decide between causes.`,
+    `Then record your finding and propose the action. I will approve or reject`,
+    `anything irreversible.`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
-  await postTurn(sessionId, [{ type: 'user.message', content: brief }]);
+  await postTurn(sessionId, [{ type: 'user.message', content: message }]);
   log(
     `escalated ${run.id} (${detection.detector}) -> session ${sessionId}` +
       `${resumed ? ' [resumed existing session]' : ' [new session]'}`,
