@@ -182,8 +182,12 @@ function describeCall(call: ModelToolCall): { name: string; arguments: unknown }
 export async function pendingApprovals(sessionId: string): Promise<
   Array<{ threadId: string; toolCallId: string; name: string; arguments: unknown; at: string }>
 > {
-  const events = await listSessionEvents(sessionId);
+  return approvalsFrom(await listSessionEvents(sessionId));
+}
 
+export function approvalsFrom(
+  events: SessionEvent[],
+): Array<{ threadId: string; toolCallId: string; name: string; arguments: unknown; at: string }> {
   const byEventId = new Map<string, SessionEvent>();
   for (const event of events) if (event.id) byEventId.set(event.id, event);
 
@@ -216,6 +220,23 @@ export async function pendingApprovals(sessionId: string): Promise<
     }
   }
   return [...pending.values()];
+}
+
+/**
+ * Everything the console needs about a session, from ONE fetch.
+ *
+ * Rendering a card used to cost three round trips per run per poll —
+ * pendingApprovals and lastTurnOutcome each fetched the full event list
+ * independently, and the console polls every two seconds. With a handful of
+ * runs that is a steady drumbeat of duplicate requests at the harness for no
+ * new information.
+ */
+export async function sessionSnapshot(sessionId: string): Promise<{
+  approvals: Awaited<ReturnType<typeof pendingApprovals>>;
+  events: SessionEvent[];
+}> {
+  const events = await listSessionEvents(sessionId);
+  return { approvals: approvalsFrom(events), events };
 }
 
 export async function decideApproval(

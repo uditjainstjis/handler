@@ -10,7 +10,7 @@
  * So the watcher treats a rate-limited turn as unfinished work and picks it up
  * again, honouring the delay the provider asked for.
  */
-import { listTurns, listSessionEvents, postTurn } from '../trueforge/client.ts';
+import { type SessionEvent, listTurns, listSessionEvents, postTurn } from '../trueforge/client.ts';
 
 const RATE_LIMITED = /\b429\b|rate.?limit|quota/i;
 
@@ -27,8 +27,14 @@ export function parseRetryAfterMs(message: string): number {
   return 45_000;
 }
 
-export async function lastTurnOutcome(sessionId: string): Promise<TurnOutcome> {
-  const [events, turns] = await Promise.all([listSessionEvents(sessionId), listTurns(sessionId)]);
+export async function lastTurnOutcome(
+  sessionId: string,
+  prefetched?: SessionEvent[],
+): Promise<TurnOutcome> {
+  const [events, turns] = await Promise.all([
+    prefetched ? Promise.resolve(prefetched) : listSessionEvents(sessionId),
+    listTurns(sessionId),
+  ]);
   if (turns.length === 0) return { state: 'done' };
 
   // Scope to the CURRENT turn. Taking the last turn.done in the whole session

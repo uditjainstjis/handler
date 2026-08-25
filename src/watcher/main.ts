@@ -22,7 +22,7 @@ import {
 } from '../runs/store.ts';
 import { isAlive, reconcile } from '../runs/runner.ts';
 import { detect } from './detectors.ts';
-import { retryIfRateLimited } from './retry.ts';
+import { lastTurnOutcome, retryIfRateLimited } from './retry.ts';
 import { AGENT_NAME, MCP_SERVER_NAME, provision } from '../trueforge/agent.ts';
 import { chatUrlFor, createSession, isUp, postTurn, sessionExists } from '../trueforge/client.ts';
 
@@ -219,6 +219,15 @@ async function resumeRateLimited(): Promise<void> {
   for (const summary of await listRuns()) {
     const run = await loadRun(summary.id);
     if (!run?.sessionId || !run.incidentOpenedAt) continue;
+
+    // A session that has since had a clean turn is healthy again; carrying the
+    // old attempt count forward would make its next genuine rate limit wait
+    // half an hour for no reason.
+    const outcome = await lastTurnOutcome(run.sessionId);
+    if (outcome.state === 'done' || outcome.state === 'running') {
+      retryAttempts.delete(run.sessionId);
+      continue;
+    }
 
     const attempt = retryAttempts.get(run.sessionId) ?? 0;
     const result = await retryIfRateLimited(run.sessionId, attempt, MAX_RATE_LIMIT_RETRIES);

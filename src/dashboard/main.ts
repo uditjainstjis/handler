@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import { latestIncident, listRuns, loadRun, readLog, readMetrics } from '../runs/store.ts';
 import { isAlive } from '../runs/runner.ts';
-import { chatUrlFor, decideApproval, isUp, pendingApprovals } from '../trueforge/client.ts';
+import { chatUrlFor, decideApproval, isUp, pendingApprovals, sessionSnapshot } from '../trueforge/client.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.HANDLER_DASHBOARD_PORT ?? 8812);
