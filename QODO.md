@@ -17,9 +17,11 @@ Qodo. The only direct commit to `main` is the empty scaffold — licence,
 | [#7](https://github.com/uditjainstjis/handler/pull/7) | Unwrap session events — approvals were never being found | 1 |
 | [#8](https://github.com/uditjainstjis/handler/pull/8) | Hand the agent the evidence the detector already has | 2 |
 | [#9](https://github.com/uditjainstjis/handler/pull/9) | `handler doctor` | — |
-| [#10](https://github.com/uditjainstjis/handler/pull/10) | **Acts on the review**: eight fixes + regression tests | — |
+| [#10](https://github.com/uditjainstjis/handler/pull/10) | **Acts on the review**: eight fixes + regression tests | 8 |
+| [#11](https://github.com/uditjainstjis/handler/pull/11) | Transcript export, poke, and a self-managing MCP token | — |
+| [#12](https://github.com/uditjainstjis/handler/pull/12) | **Kill the process group** — a regression #10 introduced | — |
 
-**31 findings in total.**
+**45 findings in total.** All twelve merged after review.
 
 ## The representative one
 
@@ -47,6 +49,29 @@ And the one that punctured a claim I had made in a PR description:
 Exactly right. Annotations gate calls arriving **through the harness**; a client
 hitting `:8811` directly never goes near TrueForge, so `kill_run` would simply
 run. The server is now loopback-bound behind a shared secret.
+
+## The review caught a regression the previous fix introduced
+
+This is the part that convinced me the integration was worth having rather than
+merely required.
+
+[#10](https://github.com/uditjainstjis/handler/pull/10) wrapped each run in a
+shell script to recover its exit code. Qodo reviewed that fix and reported
+**"Kill targets wrapper only"** on it. Correct: the recorded pid became the
+wrapper shell, so `kill_run` killed the shell and the Python trainer — its child
+— carried on. Measured before fixing:
+
+```
+recorded pid (shell)   93962
+actual trainer         93963
+kill -TERM 93962   ->  trainer still stepping, metric rows 8 -> 10
+```
+
+The run record said `killed`. The console said `killed`. The GPU kept billing.
+That is exactly the failure `kill_run` exists to prevent, and no assertion about
+the run record could have caught it — the record was correct and the world was
+not. [#12](https://github.com/uditjainstjis/handler/pull/12) kills the process
+group instead, with a test that greps the process table.
 
 ## What was not taken
 

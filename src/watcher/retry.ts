@@ -27,6 +27,24 @@ export function parseRetryAfterMs(message: string): number {
   return 45_000;
 }
 
+const MAX_BACKOFF_MS = 30 * 60 * 1000;
+
+/**
+ * How long to actually wait, given how many times this has already failed.
+ *
+ * A per-minute quota and an exhausted daily one produce the same 429 and the
+ * same "retry in ~57s" hint. The difference only shows up in whether retrying
+ * works — so after the first couple of failures, stop believing the hint and
+ * back off geometrically. Retrying a spent daily quota every minute for eight
+ * hours is not resilience, it is noise that hides the real state from whoever
+ * is reading the log.
+ */
+export function backoffMs(providerHintMs: number, attempt: number): number {
+  if (attempt <= 1) return providerHintMs;
+  const grown = providerHintMs * 2 ** (attempt - 1);
+  return Math.min(grown, MAX_BACKOFF_MS);
+}
+
 export async function lastTurnOutcome(sessionId: string): Promise<TurnOutcome> {
   const [events, turns] = await Promise.all([listSessionEvents(sessionId), listTurns(sessionId)]);
   if (turns.length === 0) return { state: 'done' };
@@ -67,7 +85,7 @@ export async function retryIfRateLimited(
   if (outcome.state !== 'rate-limited') return { retried: false, reason: outcome.state };
   if (attempt >= maxAttempts) return { retried: false, reason: 'attempts exhausted' };
 
-  const wait = outcome.retryAfterMs;
+  const wait = backoffMs(outcome.retryAfterMs, attempt);
   await new Promise(resolve => setTimeout(resolve, wait));
   await postTurn(sessionId, [
     {
