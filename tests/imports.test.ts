@@ -57,11 +57,15 @@ test('every module loads', async () => {
       await import(`${file}?importcheck`);
     } catch (error) {
       const message = (error as Error).message;
-      // A module that throws at import for an environmental reason (no
-      // credentials, no server) has still parsed, which is what is being
-      // tested. Syntax errors are the failure that matters.
-      if (/SyntaxError|ERR_INVALID_TYPESCRIPT_SYNTAX|Cannot find module/.test(String((error as Error).name) + message)) {
-        failures.push(`${path.relative(SRC, file)}: ${message.split('\n')[0]}`);
+      // Tolerate ONLY the environmental reasons a module legitimately cannot
+      // finish importing on a machine with no credentials and nothing running.
+      // Everything else — including a TypeError from a bad top-level
+      // expression — is a real defect, and an allow-list is the only way to
+      // say that without also swallowing it.
+      const environmental =
+        /No Alpaca credentials|credentials|ECONNREFUSED|fetch failed|ENOENT/i.test(message);
+      if (!environmental) {
+        failures.push(`${path.relative(SRC, file)}: ${(error as Error).name}: ${message.split('\n')[0]}`);
       }
     }
   }
