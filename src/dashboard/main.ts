@@ -11,12 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 import { latestIncident, listRuns, loadRun, readLog, readMetrics } from '../runs/store.ts';
 import { isAlive } from '../runs/runner.ts';
-<<<<<<< HEAD
 import { chatUrlFor, decideApproval, isUp, pendingApprovals, sessionSnapshot } from '../trueforge/client.ts';
-=======
-import { chatUrlFor, decideApproval, isUp, pendingApprovals } from '../trueforge/client.ts';
 import { lastTurnOutcome } from '../watcher/retry.ts';
->>>>>>> origin/main
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.HANDLER_DASHBOARD_PORT ?? 8812);
@@ -123,6 +119,12 @@ app.post('/api/decide', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  process.stdout.write(`HANDLER console on http://localhost:${PORT}\n`);
-});
+// Only listen when executed directly, so importing this module for a test or
+// a tool does not bind a port.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  app.listen(PORT, () => {
+    process.stdout.write(`HANDLER console on http://localhost:${PORT}\n`);
+  });
+}
+
+export { app };

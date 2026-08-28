@@ -110,4 +110,8 @@ async function main() {
   });
 }
 
-void main();
+// Only run when executed directly. Importing this module — a test, a tool,
+// another entry point — must not start a server or a trading loop.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  void main();
+}
