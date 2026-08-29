@@ -45,17 +45,19 @@ function buildServer(): McpServer {
   return server;
 }
 
-async function main() {
-  await ensureRoot();
-
-  if (!token()) {
-    process.stderr.write('Refusing to start without an MCP token — that would serve kill_run to anyone.\n');
-    process.exit(1);
-  }
+/**
+ * Build the HTTP app without binding a port.
+ *
+ * Split out from `main` so a test can exercise the routes. The refactor is not
+ * cosmetic: a stale reference in the healthz handler once made every request
+ * throw while the process still started cleanly and printed its banner, and
+ * nothing could catch it without being able to send a request.
+ */
+export function buildApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
 
-  app.get('/healthz', (_req, res) => res.json({ ok: true, server: 'handler-ops', authenticated: Boolean(TOKEN) }));
+  app.get('/healthz', (_req, res) => res.json({ ok: true, server: 'handler-ops', authenticated: Boolean(token()) }));
 
   app.use('/mcp', (req, res, next) => {
     // Fail closed. An empty token must never mean "let everyone in" — these
@@ -108,6 +110,18 @@ async function main() {
   app.get('/mcp', notAllowed);
   app.delete('/mcp', notAllowed);
 
+  return app;
+}
+
+async function main() {
+  await ensureRoot();
+
+  if (!token()) {
+    process.stderr.write('Refusing to start without an MCP token — that would serve kill_run to anyone.\n');
+    process.exit(1);
+  }
+
+  const app = buildApp();
   app.listen(PORT, HOST, () => {
     process.stdout.write(
       `handler-ops MCP listening on http://${HOST}:${PORT}/mcp ` +
