@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 /**
  * HANDLER Ops MCP server, over streamable HTTP.
  *
@@ -25,7 +26,12 @@ const HOST = process.env.HANDLER_MCP_HOST ?? '127.0.0.1';
 // They are not enforcement: a client calling this endpoint directly never goes
 // near the harness, so kill_run would just run. A shared secret is what stops
 // that, and the harness sends it as a static header.
-const TOKEN = mcpToken();
+// Resolved lazily. At module scope this wrote a token file as a side effect of
+// merely importing the module — which a test that imports every module then
+// performs on someone's machine. A credential should be created when the
+// server starts, not when the file is read.
+let cachedToken: string | undefined;
+const token = (): string => (cachedToken ??= mcpToken());
 
 function buildServer(): McpServer {
   const server = new McpServer(
@@ -42,7 +48,7 @@ function buildServer(): McpServer {
 async function main() {
   await ensureRoot();
 
-  if (!TOKEN) {
+  if (!token()) {
     process.stderr.write('Refusing to start without an MCP token — that would serve kill_run to anyone.\n');
     process.exit(1);
   }
@@ -58,7 +64,7 @@ async function main() {
     const presented = req.header('x-handler-token') ?? '';
     // Length-independent compare would be nicer, but the timing signal on a
     // loopback secret is not the threat here; a missing check is.
-    if (presented !== TOKEN) {
+    if (presented !== token()) {
       res.status(401).json({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Unauthorized: x-handler-token missing or wrong.' },
@@ -110,4 +116,11 @@ async function main() {
   });
 }
 
-void main();
+// Only run when executed directly. Importing this module — a test, a tool,
+// another entry point — must not start a server or a trading loop.
+// pathToFileURL, not string concatenation: argv[1] containing a space, a
+// symlink, or a Windows drive letter never equals `file://` + the raw path,
+// and the entry point would silently refuse to run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main();
+}

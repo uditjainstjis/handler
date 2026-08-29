@@ -7,16 +7,12 @@
  */
 import express from 'express';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { latestIncident, listRuns, loadRun, readLog, readMetrics } from '../runs/store.ts';
 import { isAlive } from '../runs/runner.ts';
-<<<<<<< HEAD
 import { chatUrlFor, decideApproval, isUp, pendingApprovals, sessionSnapshot } from '../trueforge/client.ts';
-=======
-import { chatUrlFor, decideApproval, isUp, pendingApprovals } from '../trueforge/client.ts';
 import { lastTurnOutcome } from '../watcher/retry.ts';
->>>>>>> origin/main
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.HANDLER_DASHBOARD_PORT ?? 8812);
@@ -123,6 +119,15 @@ app.post('/api/decide', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  process.stdout.write(`HANDLER console on http://localhost:${PORT}\n`);
-});
+// Only listen when executed directly, so importing this module for a test or
+// a tool does not bind a port.
+// pathToFileURL, not string concatenation: argv[1] containing a space, a
+// symlink, or a Windows drive letter never equals `file://` + the raw path,
+// and the entry point would silently refuse to run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  app.listen(PORT, () => {
+    process.stdout.write(`HANDLER console on http://localhost:${PORT}\n`);
+  });
+}
+
+export { app };

@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 /**
  * The watcher: the thing that is awake when you are not.
  *
@@ -267,4 +268,11 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+// Only run when executed directly. Importing this module — a test, a tool,
+// another entry point — must not start a server or a trading loop.
+// pathToFileURL, not string concatenation: argv[1] containing a space, a
+// symlink, or a Windows drive letter never equals `file://` + the raw path,
+// and the entry point would silently refuse to run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main();
+}
